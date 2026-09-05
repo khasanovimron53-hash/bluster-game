@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bluster PvP 1v1 Telegram</title>
+    <!-- Только базовая физика и неубиваемая облачная сеть, которая разрешена в ТГ -->
+    <script src="https://cloudflare.com"></script>
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        * { box-sizing: border-box; user-select: none; -webkit-user-select: none; margin: 0; padding: 0; }
+        body { background-color: #050508; overflow: hidden; color: #fff; font-family: monospace; width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #lobby { background: #0d0d13; padding: 30px; border-radius: 4px; box-shadow: 0 0 20px #00e5ff; border: 2px solid #00e5ff; text-align: center; width: 340px; z-index: 10; }
+        input { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #00e5ff; background: #12121a; color: #00e5ff; text-align: center; font-size: 16px; font-family: monospace; }
+        button { width: 100%; padding: 12px; border: none; background: #00e5ff; color: #000; font-weight: bold; font-size: 16px; cursor: pointer; font-family: monospace; }
+        button:hover { background: #fff; box-shadow: 0 0 15px #00e5ff; }
+        #game-container { display: none; position: relative; width: 100%; height: 100%; }
+        canvas { display: block; margin: 0 auto; box-shadow: 0 0 30px rgba(0,229,255,0.1); }
+        #controls { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; justify-content: space-between; padding: 0 30px; pointer-events: none; }
+        .btn-group { display: flex; gap: 15px; pointer-events: auto; }
+        .joy-btn { width: 65px; height: 65px; background: rgba(0,229,255,0.1); border: 2px solid #00e5ff; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 24px; color: #00e5ff; cursor: pointer; }
+        #hud { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); display: flex; gap: 60px; font-size: 16px; pointer-events: none; text-shadow: 0 0 5px #00e5ff; }
+        .hp-bar { width: 140px; height: 12px; background: #111; border: 1px solid #00e5ff; margin-top: 5px; border-radius: 2px; overflow: hidden; }
+        #p1-hp-fill { width: 100%; height: 100%; background: #00e5ff; }
+        #p2-hp-fill { width: 100%; height: 100%; background: #ff0055; }
+    </style>
+</head>
+<body>
+
+    <div id="lobby">
+        <h2 style="color: #00e5ff; margin-bottom: 10px; letter-spacing: 2px;">BLUSTER PVP</h2>
+        <input type="text" id="my-tg-nick" placeholder="Твой ник в ТГ (без @)">
+        <input type="text" id="friend-tg-nick" placeholder="Ник друга в ТГ (без @)">
+        <button id="start-match-btn">ЗАПУСТИТЬ ОНЛАЙН</button>
+        <p id="status" style="color:#00e5ff; font-size:12px; margin-top:10px;"></p>
+    </div>
+
+    <div id="game-container">
+        <div id="hud">
+            <div style="text-align:center;"><span style="color: #00e5ff;" id="p1-name">P1</span><div class="hp-bar"><div id="p1-hp-fill"></div></div></div>
+            <div style="text-align:center;"><span style="color: #ff0055;" id="p2-name">P2</span><div class="hp-bar"><div id="p2-hp-fill"></div></div></div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="controls">
+            <div class="btn-group"><div class="joy-btn" id="btn-left">←</div><div class="joy-btn" id="btn-right">→</div></div>
+            <div class="btn-group"><div class="joy-btn" id="btn-jump">↑</div><div class="joy-btn" id="btn-fire" style="border-color: #ff0055; color: #ff0055;">🔥</div></div>
+        </div>
+    </div>
+
+    <script>
+        const { Engine, Runner, Bodies, Composite, Body, Events } = Matter;
+        const engine = Engine.create({ gravity: { y: 1.4 } });
+        const world = engine.world;
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth < 800 ? window.innerWidth : 800;
+        canvas.height = window.innerHeight < 600 ? window.innerHeight : 600;
+
+        const ground = Bodies.rectangle(400, 590, 800, 20, { isStatic: true });
+        const wallL = Bodies.rectangle(10, 300, 20, 600, { isStatic: true });
+        const wallR = Bodies.rectangle(790, 300, 20, 600, { isStatic: true });
+        const plat1 = Bodies.rectangle(200, 420, 180, 15, { isStatic: true });
+        const plat2 = Bodies.rectangle(600, 420, 180, 15, { isStatic: true });
+
+        Composite.add(world, [ground, wallL, wallR, plat1, plat2]);
+
+        const p1 = Bodies.rectangle(120, 500, 26, 46, { inertia: Infinity, friction: 0.05 });
+        const p2 = Bodies.rectangle(680, 500, 26, 46, { inertia: Infinity, friction: 0.05 });
+        Composite.add(world, [p1, p2]);
+
+        let p1HP = 100, p2HP = 100;
+        let isHost = false;
+        let keys = { left: false, right: false, jump: false, fire: false };
+        let p1Facing = 1, p2Facing = -1;
+
+        // Инициализация свободного облака GunDB для ТГ-приложений
+        const gun = Gun(['https://herokuapp.com']);
+        let gameRoom;
+
+        function drawPixelAsset(context, x, y, type, facing) {
+            context.save(); context.translate(x, y); context.scale(facing, 1);
+            context.fillStyle = type === 'p1' ? '#00e5ff' : '#ff0055';
+            context.fillRect(-10, -20, 20, 30);
+            context.fillStyle = '#ffffff'; context.fillRect(2, -15, 6, 4);
+            context.fillStyle = '#888'; context.fillRect(5, -5, 12, 5);
+            context.restore();
+        }
+
+        document.getElementById('start-match-btn').onclick = () => {
+            let my = document.getElementById('my-tg-nick').value.trim().toLowerCase();
+            let friend = document.getElementById('friend-tg-nick').value.trim().toLowerCase();
+            if(!my || !friend) return alert("Введи оба юзернейма!");
+
+            // Автоматически определяем Роль (Хост/Клиент) по алфавиту юзернеймов
+            if (my < friend) {
+                isHost = true;
+                gameRoom = gun.get(`tg_room_${my}_vs_${friend}`);
+            } else {
+                isHost = false;
+                gameRoom = gun.get(`tg_room_${friend}_vs_${my}`);
+            }
+
+            document.getElementById('p1-name').innerText = my.toUpperCase();
+            document.getElementById('p2-name').innerText = friend.toUpperCase();
+
+            gameRoom.on((data) => {
+                if (!data) return;
+                if (isHost) {
+                    if (data.type === 'c_keys') handleClientInputs(data);
+                } else {
+                    if (data.type === 'w_state') {
+                        Body.setPosition(p1, { x: data.x1, y: data.y1 }); p1Facing = data.f1;
+                        Body.setPosition(p2, { x: data.x2, y: data.y2 }); p2Facing = data.f2;
+                        p1HP = data.h1; p2HP = data.h2;
+                    }
+                }
+            });
+
+            document.getElementById('lobby').style.display = 'none';
+            document.getElementById('game-container').style.display = 'block';
+            Runner.run(Runner.create(), engine);
+            requestAnimationFrame(gameLoop);
+        };
+
+        setupMobileBtn('btn-left', 'left'); setupMobileBtn('btn-right', 'right');
+        setupMobileBtn('btn-jump', 'jump'); setupMobileBtn('btn-fire', 'fire');
+
+        function setupMobileBtn(id, keyName) {
+            const btn = document.getElementById(id);
+            btn.addEventListener('touchstart', e => { e.preventDefault(); keys[keyName] = true; });
+            btn.addEventListener('touchend', e => { e.preventDefault(); keys[keyName] = false; });
+        }
+
+        function handleClientInputs(c) {
+            let speed = 4.5;
+            if (c.l) { Body.setVelocity(p2, { x: -speed, y: p2.velocity.y }); p2Facing = -1; }
+            else if (c.r) { Body.setVelocity(p2, { x: speed, y: p2.velocity.y }); p2Facing = 1; }
+            else { Body.setVelocity(p2, { x: 0, y: p2.velocity.y }); }
+            if (c.j && Math.abs(p2.velocity.y) < 0.02) Body.applyForce(p2, p2.position, { x: 0, y: -0.045 });
+            if (c.f) shoot(p2, p2Facing);
+        }
+
+        let canShoot = true;
+        function shoot(player, dir) {
+            if (!canShoot) return; canShoot = false; setTimeout(() => canShoot = true, 350);
+            const bPos = { x: player.position.x + (dir * 25), y: player.position.y - 3 };
+            const bVel = { x: dir * 14, y: 0 };
+            if(isHost) {
+                const bullet = Bodies.circle(bPos.x, bPos.y, 4, { restitution: 0.95, frictionAir: 0, label: 'bullet' });
+                Body.setVelocity(bullet, bVel); Composite.add(world, bullet);
+            }
+        }
+
+        Events.on(engine, 'collisionStart', event => {
+            if(!isHost) return;
+            event.pairs.forEach(pair => {
+                let bBody = pair.bodyA.label === 'bullet' ? pair.bodyA : (pair.bodyB.label === 'bullet' ? pair.bodyB : null);
+                let hitBody = bBody === pair.bodyA ? pair.bodyB : pair.bodyA;
+                if(bBody) {
+                    if(hitBody === p1) { p1HP -= 20; Composite.remove(world, bBody); }
+                    else if(hitBody === p2) { p2HP -= 20; Composite.remove(world, bBody); }
+                }
+            });
+        });
+
+        setInterval(() => {
+            if (!gameRoom) return;
+            if (isHost) {
+                gameRoom.put({ type: 'w_state', x1: p1.position.x, y1: p1.position.y, f1: p1Facing, x2: p2.position.x, y2: p2.position.y, f2: p2Facing, h1: p1HP, h2: p2HP });
+            } else {
+                gameRoom.put({ type: 'c_keys', l: keys.left, r: keys.right, j: keys.jump, f: keys.fire });
+            }
+        }, 1000 / 25);
+
+        function gameLoop() {
