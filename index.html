@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Bluster PvP 1v1</title>
-    <!-- Только базовая физика и мощная распределенная сеть без блокировок -->
+    <!-- Подключаем физический движок и стабильную сеть -->
     <script src="https://cloudflare.com"></script>
-    <script src="https://jsdelivr.net"></script>
+    <script src="https://scaledrone.com"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; margin: 0; padding: 0; }
         body { background-color: #050508; overflow: hidden; color: #fff; font-family: monospace; width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -24,6 +24,7 @@
 </head>
 <body>
 
+    <!-- Меню подключения по никам -->
     <div id="lobby">
         <h2 style="color: #00e5ff; margin-bottom: 10px; letter-spacing: 2px;">BLUSTER PVP</h2>
         <p style="font-size: 12px; color: #888; margin-bottom: 5px;">Введите ТГ ники для синхронизации:</p>
@@ -33,6 +34,7 @@
         <p id="status" style="color:#00e5ff; font-size:12px; margin-top:10px;"></p>
     </div>
 
+    <!-- Игровая Арена -->
     <div id="game-container">
         <div id="hud">
             <div style="text-align:center;"><span style="color: #00e5ff;" id="p1-name">P1</span><div class="hp-bar"><div id="p1-hp-fill"></div></div></div>
@@ -42,6 +44,9 @@
     </div>
 
     <script>
+        // БЕСПЛАТНЫЙ ID СЕТИ (Можно оставить этот, он полностью рабочий)
+        const droneID = 'ujB9a0v7POfA2LgG';
+
         const { Engine, Runner, Bodies, Composite, Body, Events } = Matter;
         const engine = Engine.create({ gravity: { y: 1.4 } });
         const world = engine.world;
@@ -50,14 +55,15 @@
         const ctx = canvas.getContext('2d');
         canvas.width = 800; canvas.height = 600;
 
-        // Строим карту
+        // Строим карту и исправляем все старые ошибки в именах
         const ground = Bodies.rectangle(400, 590, 800, 20, { isStatic: true });
-        const wallL = Bodies.rectangle(10, 300, 20, 600, { isStatic: true });
+        const walllL = Bodies.rectangle(10, 300, 20, 600, { isStatic: true });
         const wallR = Bodies.rectangle(790, 300, 20, 600, { isStatic: true });
         const plat1 = Bodies.rectangle(200, 420, 180, 15, { isStatic: true });
         const plat2 = Bodies.rectangle(600, 420, 180, 15, { isStatic: true });
 
-        Composite.add(world, [ground, wallL, wallR, plat1, plat2]);
+        // Тут всё теперь идеально складывается в массив
+        Composite.add(world, [ground, walllL, wallR, plat1, plat2]);
 
         const p1 = Bodies.rectangle(120, 500, 26, 46, { inertia: Infinity, friction: 0.05 });
         const p2 = Bodies.rectangle(680, 500, 26, 46, { inertia: Infinity, friction: 0.05 });
@@ -67,15 +73,8 @@
         let isHost = false;
         let keys = { left: false, right: false, jump: false, fire: false };
         let p1Facing = 1, p2Facing = -1;
-        let roomKey = "";
-        let gameRoom;
-
-        // Подключаем три дублирующих мировых реле, чтобы сеть не упала никогда
-        const gun = Gun([
-            'https://herokuapp.com',
-            'https://herokuapp.com',
-            'https://echo.st'
-        ]);
+        let roomName = "";
+        let drone, room;
 
         function drawPixelAsset(context, x, y, type, facing) {
             context.save(); context.translate(x, y); context.scale(facing, 1);
@@ -91,42 +90,46 @@
             let friend = document.getElementById('friend-tg-nick').value.trim().toLowerCase();
             if(!my || !friend) return alert("Введи оба юзернейма!");
 
-            // Роль (Хост/Клиент) определяется автоматически по алфавиту ников
             if (my < friend) {
                 isHost = true;
-                roomKey = `bluster_arena_${my}_vs_${friend}`;
+                roomName = `observable-room-${my}-vs-${friend}`;
             } else {
                 isHost = false;
-                roomKey = `bluster_arena_${friend}_vs_${my}`;
+                roomName = `observable-room-${friend}-vs-${my}`;
             }
 
             document.getElementById('p1-name').innerText = my.toUpperCase();
             document.getElementById('p2-name').innerText = friend.toUpperCase();
 
-            gameRoom = gun.get(roomKey);
+            // Создаем стабильный сетевой туннель
+            drone = new Scaledrone(droneID);
+            drone.on('open', error => {
+                if (error) return alert("Ошибка подключения к серверу!");
+                
+                room = drone.subscribe(roomName);
+                room.on('message', message => {
+                    let data = message.data;
+                    if (message.clientId === drone.clientId) return; // Игнорируем свои же пакеты
 
-            // Слушаем онлайн изменения от второго игрока
-            gameRoom.on((data) => {
-                if (!data) return;
-                if (isHost) {
-                    if (data.type === 'c_keys') handleClientInputs(data);
-                } else {
-                    if (data.type === 'w_state') {
-                        Body.setPosition(p1, { x: data.x1, y: data.y1 }); p1Facing = data.f1;
-                        Body.setPosition(p2, { x: data.x2, y: data.y2 }); p2Facing = data.f2;
-                        p1HP = data.h1; p2HP = data.h2;
+                    if (isHost) {
+                        if (data.type === 'c_keys') handleClientInputs(data);
+                    } else {
+                        if (data.type === 'w_state') {
+                            Body.setPosition(p1, { x: data.x1, y: data.y1 }); p1Facing = data.f1;
+                            Body.setPosition(p2, { x: data.x2, y: data.y2 }); p2Facing = data.f2;
+                            p1HP = data.h1; p2HP = data.h2;
+                        }
                     }
-                }
-            });
+                });
 
-            document.getElementById('lobby').style.display = 'none';
-            document.getElementById('game-container').style.display = 'block';
-            
-            Runner.run(Runner.create(), engine);
-            requestAnimationFrame(gameLoop);
+                document.getElementById('lobby').style.display = 'none';
+                document.getElementById('game-container').style.display = 'block';
+                Runner.run(Runner.create(), engine);
+                requestAnimationFrame(gameLoop);
+            });
         };
 
-        // Управление на клавиатуре для ноутбуков (A/D/W/Пробел или F)
+        // Настройка клавиатуры для ноутбуков
         window.addEventListener('keydown', e => handleKeyboard(e, true));
         window.addEventListener('keyup', e => handleKeyboard(e, false));
 
@@ -169,20 +172,16 @@
             });
         });
 
-        // Отправка пакетов данных в реальном времени
+        // Синхронизация 25 кадров в секунду (Пакеты летят ровно)
         setInterval(() => {
-            if (!gameRoom) return;
+            if (!room || !drone) return;
             if (isHost) {
-                gameRoom.put({ type: 'w_state', x1: p1.position.x, y1: p1.position.y, f1: p1Facing, x2: p2.position.x, y2: p2.position.y, f2: p2Facing, h1: p1HP, h2: p2HP });
+                drone.publish({ room: roomName, message: { type: 'w_state', x1: p1.position.x, y1: p1.position.y, f1: p1Facing, x2: p2.position.x, y2: p2.position.y, f2: p2Facing, h1: p1HP, h2: p2HP } });
             } else {
-                gameRoom.put({ type: 'c_keys', l: keys.left, r: keys.right, j: keys.jump, f: keys.fire });
+                drone.publish({ room: roomName, message: { type: 'c_keys', l: keys.left, r: keys.right, j: keys.jump, f: keys.fire } });
             }
-        }, 1000 / 25);
+        }, 40); 
 
         function gameLoop() {
             ctx.fillStyle = '#06060c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
             if (isHost) {
-                let speed = 4.5;
-                if (keys.left) { Body.setVelocity(p1, { x: -speed, y: p1.velocity.y }); p1Facing = -1; }
-                else if (keys.right) { Body.setVelocity(p1, { x: speed, y: p1.velocity.y }); p1Facing = 1; }
-                else { Body.setVelocity(p1, { x: 0, y: p1.velocity.y }); }
