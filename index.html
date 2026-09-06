@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Bluster PvP 1v1 Telegram</title>
-    <!-- Только базовая физика и неубиваемая облачная сеть, которая разрешена в ТГ -->
+    <title>Bluster PvP 1v1</title>
+    <!-- Только базовая физика и мощная распределенная сеть без блокировок -->
     <script src="https://cloudflare.com"></script>
     <script src="https://jsdelivr.net"></script>
     <style>
@@ -16,9 +16,6 @@
         button:hover { background: #fff; box-shadow: 0 0 15px #00e5ff; }
         #game-container { display: none; position: relative; width: 100%; height: 100%; }
         canvas { display: block; margin: 0 auto; box-shadow: 0 0 30px rgba(0,229,255,0.1); }
-        #controls { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; justify-content: space-between; padding: 0 30px; pointer-events: none; }
-        .btn-group { display: flex; gap: 15px; pointer-events: auto; }
-        .joy-btn { width: 65px; height: 65px; background: rgba(0,229,255,0.1); border: 2px solid #00e5ff; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 24px; color: #00e5ff; cursor: pointer; }
         #hud { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); display: flex; gap: 60px; font-size: 16px; pointer-events: none; text-shadow: 0 0 5px #00e5ff; }
         .hp-bar { width: 140px; height: 12px; background: #111; border: 1px solid #00e5ff; margin-top: 5px; border-radius: 2px; overflow: hidden; }
         #p1-hp-fill { width: 100%; height: 100%; background: #00e5ff; }
@@ -29,8 +26,9 @@
 
     <div id="lobby">
         <h2 style="color: #00e5ff; margin-bottom: 10px; letter-spacing: 2px;">BLUSTER PVP</h2>
-        <input type="text" id="my-tg-nick" placeholder="Твой ник в ТГ (без @)">
-        <input type="text" id="friend-tg-nick" placeholder="Ник друга в ТГ (без @)">
+        <p style="font-size: 12px; color: #888; margin-bottom: 5px;">Введите ТГ ники для синхронизации:</p>
+        <input type="text" id="my-tg-nick" placeholder="Твой ник в ТГ">
+        <input type="text" id="friend-tg-nick" placeholder="Ник друга в ТГ">
         <button id="start-match-btn">ЗАПУСТИТЬ ОНЛАЙН</button>
         <p id="status" style="color:#00e5ff; font-size:12px; margin-top:10px;"></p>
     </div>
@@ -41,10 +39,6 @@
             <div style="text-align:center;"><span style="color: #ff0055;" id="p2-name">P2</span><div class="hp-bar"><div id="p2-hp-fill"></div></div></div>
         </div>
         <canvas id="gameCanvas"></canvas>
-        <div id="controls">
-            <div class="btn-group"><div class="joy-btn" id="btn-left">←</div><div class="joy-btn" id="btn-right">→</div></div>
-            <div class="btn-group"><div class="joy-btn" id="btn-jump">↑</div><div class="joy-btn" id="btn-fire" style="border-color: #ff0055; color: #ff0055;">🔥</div></div>
-        </div>
     </div>
 
     <script>
@@ -54,9 +48,9 @@
 
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        canvas.width = window.innerWidth < 800 ? window.innerWidth : 800;
-        canvas.height = window.innerHeight < 600 ? window.innerHeight : 600;
+        canvas.width = 800; canvas.height = 600;
 
+        // Строим карту
         const ground = Bodies.rectangle(400, 590, 800, 20, { isStatic: true });
         const wallL = Bodies.rectangle(10, 300, 20, 600, { isStatic: true });
         const wallR = Bodies.rectangle(790, 300, 20, 600, { isStatic: true });
@@ -73,10 +67,15 @@
         let isHost = false;
         let keys = { left: false, right: false, jump: false, fire: false };
         let p1Facing = 1, p2Facing = -1;
-
-        // Инициализация свободного облака GunDB для ТГ-приложений
-        const gun = Gun(['https://herokuapp.com']);
+        let roomKey = "";
         let gameRoom;
+
+        // Подключаем три дублирующих мировых реле, чтобы сеть не упала никогда
+        const gun = Gun([
+            'https://herokuapp.com',
+            'https://herokuapp.com',
+            'https://echo.st'
+        ]);
 
         function drawPixelAsset(context, x, y, type, facing) {
             context.save(); context.translate(x, y); context.scale(facing, 1);
@@ -92,18 +91,21 @@
             let friend = document.getElementById('friend-tg-nick').value.trim().toLowerCase();
             if(!my || !friend) return alert("Введи оба юзернейма!");
 
-            // Автоматически определяем Роль (Хост/Клиент) по алфавиту юзернеймов
+            // Роль (Хост/Клиент) определяется автоматически по алфавиту ников
             if (my < friend) {
                 isHost = true;
-                gameRoom = gun.get(`tg_room_${my}_vs_${friend}`);
+                roomKey = `bluster_arena_${my}_vs_${friend}`;
             } else {
                 isHost = false;
-                gameRoom = gun.get(`tg_room_${friend}_vs_${my}`);
+                roomKey = `bluster_arena_${friend}_vs_${my}`;
             }
 
             document.getElementById('p1-name').innerText = my.toUpperCase();
             document.getElementById('p2-name').innerText = friend.toUpperCase();
 
+            gameRoom = gun.get(roomKey);
+
+            // Слушаем онлайн изменения от второго игрока
             gameRoom.on((data) => {
                 if (!data) return;
                 if (isHost) {
@@ -119,17 +121,20 @@
 
             document.getElementById('lobby').style.display = 'none';
             document.getElementById('game-container').style.display = 'block';
+            
             Runner.run(Runner.create(), engine);
             requestAnimationFrame(gameLoop);
         };
 
-        setupMobileBtn('btn-left', 'left'); setupMobileBtn('btn-right', 'right');
-        setupMobileBtn('btn-jump', 'jump'); setupMobileBtn('btn-fire', 'fire');
+        // Управление на клавиатуре для ноутбуков (A/D/W/Пробел или F)
+        window.addEventListener('keydown', e => handleKeyboard(e, true));
+        window.addEventListener('keyup', e => handleKeyboard(e, false));
 
-        function setupMobileBtn(id, keyName) {
-            const btn = document.getElementById(id);
-            btn.addEventListener('touchstart', e => { e.preventDefault(); keys[keyName] = true; });
-            btn.addEventListener('touchend', e => { e.preventDefault(); keys[keyName] = false; });
+        function handleKeyboard(e, isDown) {
+            if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.left = isDown;
+            if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.right = isDown;
+            if (e.code === 'KeyW' || e.code === 'ArrowUp') keys.jump = isDown;
+            if (e.code === 'KeyF' || e.code === 'Space') keys.fire = isDown;
         }
 
         function handleClientInputs(c) {
@@ -164,6 +169,7 @@
             });
         });
 
+        // Отправка пакетов данных в реальном времени
         setInterval(() => {
             if (!gameRoom) return;
             if (isHost) {
@@ -174,3 +180,9 @@
         }, 1000 / 25);
 
         function gameLoop() {
+            ctx.fillStyle = '#06060c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            if (isHost) {
+                let speed = 4.5;
+                if (keys.left) { Body.setVelocity(p1, { x: -speed, y: p1.velocity.y }); p1Facing = -1; }
+                else if (keys.right) { Body.setVelocity(p1, { x: speed, y: p1.velocity.y }); p1Facing = 1; }
+                else { Body.setVelocity(p1, { x: 0, y: p1.velocity.y }); }
